@@ -84,11 +84,33 @@ impl SequenceLayoutAlgorithm {
 
         // Also consider message label widths that span between participants
         let mut adjusted_spacing = vec![self.participant_spacing; participants.len()];
+        // Extra horizontal space needed past the rightmost participant to host
+        // self-message labels drawn on the last lifeline.
+        let mut right_margin_extra = 0usize;
+        // Layout overhead reserved for the self-message marker (e.g. " ↩ ").
+        let self_message_overhead = 3usize;
         for msg in &messages {
             if let (Some(from_idx), Some(to_idx)) = (
                 database.participant_index(&msg.from),
                 database.participant_index(&msg.to),
             ) {
+                // Self-message (X->>X) does not span between two participants.
+                // The renderer paints it as a loop marker plus trailing label
+                // on the participant's lifeline (see draw_self_message). Make
+                // sure the canvas has room for the label without colliding
+                // with the next lifeline or the right margin.
+                if from_idx == to_idx {
+                    let label_extra =
+                        UnicodeWidthStr::width(msg.label.as_str()) + self_message_overhead;
+                    if from_idx + 1 < participants.len() {
+                        adjusted_spacing[from_idx] = adjusted_spacing[from_idx]
+                            .max(self.participant_spacing + label_extra);
+                    } else {
+                        right_margin_extra = right_margin_extra.max(label_extra);
+                    }
+                    continue;
+                }
+
                 let (left_idx, right_idx) = if from_idx < to_idx {
                     (from_idx, to_idx)
                 } else {
@@ -139,7 +161,7 @@ impl SequenceLayoutAlgorithm {
                 };
         }
 
-        let total_width = x + 2; // Right margin
+        let total_width = x + 2 + right_margin_extra; // Right margin (+ slack for trailing self-message labels)
 
         // Position messages
         let mut positioned_messages = Vec::new();
@@ -243,5 +265,69 @@ mod tests {
         assert!(result.messages[0].from_x < result.messages[0].to_x);
         // Second message goes left (from_x > to_x)
         assert!(result.messages[1].from_x > result.messages[1].to_x);
+    }
+
+    #[test]
+    fn self_message_does_not_panic() {
+        let mut db = SequenceDatabase::new();
+        db.add_message(Message::new("Alice", "Alice", "introspect"))
+            .unwrap();
+
+        let layout = SequenceLayoutAlgorithm::new();
+        let result = layout
+            .layout(&db)
+            .expect("self-message layout must not panic");
+
+        assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.messages[0].from_x, result.messages[0].to_x);
+    }
+
+    #[test]
+    fn self_message_on_last_participant_extends_right_margin() {
+        let mut db = SequenceDatabase::new();
+        db.add_participant(Participant::new("Alice")).unwrap();
+        db.add_participant(Participant::new("Bob")).unwrap();
+        db.add_message(Message::new(
+            "Bob",
+            "Bob",
+            "very_long_self_message_label_indeed",
+        ))
+        .unwrap();
+
+        let layout = SequenceLayoutAlgorithm::new();
+        let result = layout.layout(&db).unwrap();
+
+        // Total width must accommodate the trailing self-message label.
+        let last_x = result.participants.last().unwrap().x;
+        assert!(
+            result.width > last_x + "very_long_self_message_label_indeed".len(),
+            "canvas width {} should leave room past last lifeline at {} for the label",
+            result.width,
+            last_x
+        );
+    }
+
+    #[test]
+    fn self_message_between_participants_widens_neighbor_spacing() {
+        let mut db = SequenceDatabase::new();
+        db.add_participant(Participant::new("Alice")).unwrap();
+        db.add_participant(Participant::new("Bob")).unwrap();
+        db.add_message(Message::new(
+            "Alice",
+            "Alice",
+            "very_long_self_message_label_indeed",
+        ))
+        .unwrap();
+
+        let layout = SequenceLayoutAlgorithm::new();
+        let result = layout.layout(&db).unwrap();
+
+        let alice_x = result.participants[0].x;
+        let bob_x = result.participants[1].x;
+        assert!(
+            bob_x - alice_x > "very_long_self_message_label_indeed".len(),
+            "neighbor spacing {} must exceed self-message label width to avoid lifeline collision",
+            bob_x - alice_x
+        );
     }
 }

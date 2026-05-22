@@ -132,6 +132,13 @@ impl SequenceRenderer {
         arrow: &ArrowType,
     ) {
         let unicode = self.is_unicode();
+
+        // Self-message: short loop on the right of the lifeline with label trailing
+        if from_x == to_x {
+            self.draw_self_message(canvas, from_x, y, label, arrow);
+            return;
+        }
+
         let going_right = to_x > from_x;
         let solid = arrow.line == LineStyle::Solid;
 
@@ -182,6 +189,43 @@ impl SequenceRenderer {
         if !label.is_empty() {
             let center_x = (from_x + to_x) / 2;
             canvas.draw_text_centered(center_x, y, label);
+        }
+    }
+
+    /// Draw a self-message as a short loop hanging off the right side of the
+    /// participant's lifeline.
+    ///
+    /// Layout (single canvas row, label written to the right):
+    ///
+    /// ```text
+    ///     │↩ label
+    /// ```
+    fn draw_self_message(
+        &self,
+        canvas: &mut AsciiCanvas,
+        x: usize,
+        y: usize,
+        label: &str,
+        arrow: &ArrowType,
+    ) {
+        let unicode = self.is_unicode();
+        let loop_char = match (unicode, arrow.line) {
+            (true, LineStyle::Solid) => '↩',
+            (true, LineStyle::Dotted) => '↺',
+            (false, _) => '*',
+        };
+
+        // The lifeline already occupies `x`; draw the loop marker one column to
+        // the right.
+        canvas.set_char(x + 1, y, loop_char);
+
+        if !label.is_empty() {
+            // Label sits two columns to the right of the marker so it never
+            // overlaps another lifeline.
+            let label_x = x + 3;
+            for (i, ch) in label.chars().enumerate() {
+                canvas.set_char(label_x + i, y, ch);
+            }
         }
     }
 
@@ -330,5 +374,33 @@ mod tests {
 
         // Should contain dotted line character
         assert!(output.contains('╌') || output.contains('-'));
+    }
+
+    #[test]
+    fn self_message_renders_label_without_panic() {
+        let mut db = SequenceDatabase::new();
+        db.add_message(Message::new("Alice", "Alice", "introspect"))
+            .unwrap();
+
+        let renderer = SequenceRenderer::new();
+        let output = renderer
+            .render(&db)
+            .expect("self-message render must not panic");
+
+        assert!(output.contains("introspect"));
+        assert!(output.contains("Alice"));
+    }
+
+    #[test]
+    fn self_message_renders_in_ascii_style_without_panic() {
+        let mut db = SequenceDatabase::new();
+        db.add_message(Message::new("Alice", "Alice", "loop")).unwrap();
+
+        let renderer = SequenceRenderer::with_style(CharacterSet::Ascii);
+        let output = renderer
+            .render(&db)
+            .expect("ascii self-message render must not panic");
+
+        assert!(output.contains("loop"));
     }
 }
