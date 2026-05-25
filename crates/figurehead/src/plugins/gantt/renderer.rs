@@ -85,15 +85,7 @@ impl GanttRenderer {
                     }
                 }
 
-                // Date range annotation
-                let start_date = day_to_str(task.start_day);
-                let end_date = day_to_str(task.start_day + task.duration_days);
-                let date_info = format!("{start_date}—{end_date}");
-                // Append date info after bar, within remaining width
-                let bar_with_date = format!("{bar_line} {date_info}");
-                let cell = clip(&bar_with_date, tw.saturating_sub(label_w + 1));
-
-                rows.push(format!("│{} {}│", label, pad_right(&cell, tw.saturating_sub(label_w + 1))));
+                rows.push(format!("│{} {}│", label, bar_line));
             }
 
             // Gap after section
