@@ -171,6 +171,7 @@ impl QuadrantChartRenderer {
                 1 => (cl + Q_PAD, ct + 2),           // Q2 top-left
                 2 => (cl + Q_PAD, mid_y + 2),        // Q3 bottom-left
                 3 => (mid_x + Q_PAD, mid_y + 2),     // Q4 bottom-right
+                _ => unreachable!(),
             };
             let y_max = match qi {
                 0 | 1 => mid_y.saturating_sub(1),
