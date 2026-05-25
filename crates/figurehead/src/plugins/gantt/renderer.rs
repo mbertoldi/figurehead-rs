@@ -116,31 +116,22 @@ impl GanttRenderer {
         rows.push(format!("│{} {}│", indent, axis_line));
 
         // ── Date labels below axis ─────────────────────────────
-        let mut date_line = String::with_capacity(chart_w);
-        for i in 0..chart_w {
-            if i > 0 && i % tick_interval == 0 {
-                let day = db.min_day + ((i as f64 / chart_w as f64) * total_days) as i64;
-                let ds = day_to_str(day);
-                for (j, ch) in ds.chars().enumerate() {
-                    let pos = i + j;
-                    if pos < chart_w {
-                        while date_line.len() <= pos { date_line.push(' '); }
-                        // Replace existing chars if needed
-                    }
-                }
-                // Put the date string at position i
-                while date_line.len() < i + ds.len() { date_line.push(' '); }
-                for (j, ch) in ds.chars().enumerate() {
-                    let pos = i + j;
-                    if pos < date_line.len() {
-                        date_line.replace_range(pos..pos+1, &ch.to_string());
-                    }
-                }
+        // 4 evenly-spaced date labels
+        let num_dates = 4usize;
+        let mut date_line = String::new();
+        for ti in 0..num_dates {
+            let frac = (ti as f64 + 0.5) / num_dates as f64;
+            let day = db.min_day + (frac * total_days) as i64;
+            let ds = day_to_str(day);
+            let col = ti * chart_w / num_dates + (chart_w / num_dates).saturating_sub(ds.len()) / 2;
+            // Ensure column is within bounds
+            let col = col.min(chart_w.saturating_sub(ds.len()));
+            while date_line.len() < col { date_line.push(' '); }
+            if date_line.len() == col {
+                date_line.push_str(&ds);
             }
         }
-        // Pad date_line to chart_w
         while date_line.len() < chart_w { date_line.push(' '); }
-        let date_line = clip(&date_line, chart_w);
 
         rows.push(format!("│{} {}│", indent, date_line));
 
