@@ -6,7 +6,8 @@ use tracing::debug;
 use crate::core::Renderer;
 use super::database::{GanttDatabase, TaskStatus};
 
-const BAR_WIDTH: usize = 50;
+const BAR_WIDTH: usize = 60;
+const REF_YEAR: i32 = 2020;
 
 pub struct GanttRenderer;
 
@@ -20,38 +21,42 @@ impl GanttRenderer {
     pub fn render(&self, db: &GanttDatabase) -> Result<String> {
         debug!("Rendering Gantt chart");
 
-        // ── Compute dimensions ──────────────────────────────────
+        // ── Dimensions ──────────────────────────────────────────
         let label_w = db.sections.iter()
             .flat_map(|s| s.tasks.iter().map(|t| t.label.len()))
             .max().unwrap_or(8)
             .max(db.sections.iter().map(|s| s.name.len()).max().unwrap_or(6))
             + 2;
+        let label_w = label_w.min(28); // cap label width
 
         let total_days = (db.max_day - db.min_day).max(1) as f64;
-        let chart_w = BAR_WIDTH.max(20);
-        let total_w = label_w + chart_w + 4; // borders + padding
+        let chart_w = BAR_WIDTH;
+        let total_w = label_w + chart_w + 3; // borders + separator
 
         let mut rows = Vec::new();
 
         // ── Top border ─────────────────────────────────────────
-        rows.push(format!("┌{}┐", "─".repeat(total_w.saturating_sub(2))));
+        let tw = total_w.saturating_sub(2);
+        rows.push(format!("┌{}┐", "─".repeat(tw)));
 
         // ── Title ──────────────────────────────────────────────
         if let Some(title) = &db.title {
             let t = format!(" {} ", title);
-            let t = clip(&t, total_w.saturating_sub(2));
-            let pad = total_w.saturating_sub(2).saturating_sub(t.len());
+            let t = clip(&t, tw);
+            let pad = tw.saturating_sub(t.len());
             rows.push(format!("│{}{}{}│", " ".repeat(pad/2), t, " ".repeat(pad-pad/2)));
+            rows.push(format!("│{}│", " ".repeat(tw)));
         }
 
         // ── Sections and tasks ─────────────────────────────────
         for section in &db.sections {
+            // Section header
             if !section.name.is_empty() {
-                let hdr = format!(" {}{}", section.name, "─".repeat(total_w.saturating_sub(section.name.len()+3)));
-                rows.push(format!("│{}│", clip(&hdr, total_w.saturating_sub(2))));
-                rows.push(format!("│{}│", " ".repeat(total_w.saturating_sub(2))));
+                let hdr = format!(" ▸ {}", section.name);
+                rows.push(format!("│{}│", pad_right(&hdr, tw)));
             }
 
+            // Tasks
             for task in &section.tasks {
                 let bar_fill = match task.status {
                     TaskStatus::Done => '▓',
@@ -61,12 +66,15 @@ impl GanttRenderer {
                     TaskStatus::Milestone => '◆',
                 };
 
-                let label = clip(&task.label, label_w.saturating_sub(1));
-                let label_padded = format!("{:>width$}", label, width = label_w.saturating_sub(1));
+                // Label (right-aligned in label column)
+                let label = clip(&task.label, label_w);
+                let label = format!("{:>width$}", label, width = label_w);
 
-                // Bar position and width
+                // Bar
                 let bar_start = ((task.start_day - db.min_day) as f64 / total_days * chart_w as f64).round() as usize;
                 let bar_len = ((task.duration_days as f64 / total_days * chart_w as f64).round() as usize).max(1);
+                let bar_start = bar_start.min(chart_w.saturating_sub(1));
+                let bar_len = bar_len.min(chart_w.saturating_sub(bar_start));
 
                 let mut bar_line = String::with_capacity(chart_w);
                 for i in 0..chart_w {
@@ -77,38 +85,117 @@ impl GanttRenderer {
                     }
                 }
 
-                rows.push(format!("│{} {}│", label_padded, bar_line));
+                // Date range annotation after the bar
+                let start_date = day_to_str(task.start_day);
+                let end_date = day_to_str(task.start_day + task.duration_days);
+                let date_info = format!(" {start_date} → {end_date}");
+                let bar_line = format!("{bar_line}{date_info}");
+
+                rows.push(format!("│{} │{}│", label, clip(&bar_line, tw.saturating_sub(label_w + 1))));
             }
 
             // Gap after section
-            rows.push(format!("│{}│", " ".repeat(total_w.saturating_sub(2))));
+            rows.push(format!("│{}│", " ".repeat(tw)));
         }
 
         // ── Timeline axis ──────────────────────────────────────
-        let num_ticks = 6usize;
+        let num_ticks = 6;
+        let tick_interval = chart_w.max(1) / num_ticks;
+
         let mut axis_line = String::with_capacity(chart_w + 1);
         axis_line.push('├');
         for i in 0..chart_w {
-            if i > 0 && i % (chart_w.max(1) / num_ticks) == 0 {
+            if i > 0 && i % tick_interval == 0 {
                 axis_line.push('┼');
             } else {
                 axis_line.push('─');
             }
         }
 
-        let axis_line_full = format!("│{} {}│",
-            " ".repeat(label_w.saturating_sub(1)), axis_line);
-        rows.push(axis_line_full);
+        let indent = " ".repeat(label_w);
+        rows.push(format!("│{} {}│", indent, axis_line));
+
+        // ── Date labels below axis ─────────────────────────────
+        let mut date_line = String::with_capacity(chart_w);
+        for i in 0..chart_w {
+            if i > 0 && i % tick_interval == 0 {
+                let day = db.min_day + ((i as f64 / chart_w as f64) * total_days) as i64;
+                let ds = day_to_str(day);
+                for (j, ch) in ds.chars().enumerate() {
+                    let pos = i + j;
+                    if pos < chart_w {
+                        while date_line.len() <= pos { date_line.push(' '); }
+                        // Replace existing chars if needed
+                    }
+                }
+                // Put the date string at position i
+                while date_line.len() < i + ds.len() { date_line.push(' '); }
+                for (j, ch) in ds.chars().enumerate() {
+                    let pos = i + j;
+                    if pos < date_line.len() {
+                        date_line.replace_range(pos..pos+1, &ch.to_string());
+                    }
+                }
+            }
+        }
+        // Pad date_line to chart_w
+        while date_line.len() < chart_w { date_line.push(' '); }
+        let date_line = clip(&date_line, chart_w);
+
+        rows.push(format!("│{} {}│", indent, date_line));
 
         // ── Bottom border ──────────────────────────────────────
-        rows.push(format!("└{}┘", "─".repeat(total_w.saturating_sub(2))));
+        rows.push(format!("└{}┘", "─".repeat(tw)));
 
         Ok(rows.join("\n"))
     }
 }
 
+/// Convert day offset (from REF_DATE 2020-01-01) to YYYY-MM-DD string.
+fn day_to_str(day_offset: i64) -> String {
+    let total_days = day_offset;
+    let mut year = REF_YEAR;
+    let mut remaining = total_days;
+
+    // Advance years
+    loop {
+        let days_in_year = if is_leap(year) { 366 } else { 365 };
+        if remaining >= days_in_year {
+            remaining -= days_in_year;
+            year += 1;
+        } else {
+            break;
+        }
+    }
+
+    let days_in_month: [i64; 12] = [
+        31, if is_leap(year) { 29 } else { 28 }, 31, 30, 31, 30,
+        31, 31, 30, 31, 30, 31,
+    ];
+    let mut month = 1;
+    for md in days_in_month {
+        if remaining >= md {
+            remaining -= md;
+            month += 1;
+        } else {
+            break;
+        }
+    }
+    let day = remaining + 1;
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn is_leap(y: i32) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+}
+
 fn clip(s: &str, max: usize) -> String {
     if s.len() <= max { s.to_string() } else { s.chars().take(max).collect() }
+}
+
+fn pad_right(s: &str, width: usize) -> String {
+    if s.len() >= width { s.chars().take(width).collect() }
+    else { format!("{}{}", s, " ".repeat(width - s.len())) }
 }
 
 impl Renderer<GanttDatabase> for GanttRenderer {
@@ -137,5 +224,18 @@ mod tests {
         assert!(o.contains("Test"));
         assert!(o.contains("Task A"));
         assert!(o.contains("Task B"));
+        assert!(o.contains("2024-"));
+    }
+
+    #[test]
+    fn test_day_to_str() {
+        // 2020-01-01 = offset 0
+        assert_eq!(day_to_str(0), "2020-01-01");
+        // 2020-01-31 = offset 30
+        assert_eq!(day_to_str(30), "2020-01-31");
+        // 2020-02-01 = offset 31
+        assert_eq!(day_to_str(31), "2020-02-01");
+        // 2024-01-01 = from 2020-01-01: 4 years = 365*3 + 366 = 1461 days
+        assert_eq!(day_to_str(1461), "2024-01-01");
     }
 }
