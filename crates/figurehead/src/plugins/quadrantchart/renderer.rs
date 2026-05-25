@@ -2,33 +2,31 @@
 //!
 //! Layout:
 //! ```text
-//! ┌─ Title ──────────────────────────────────────────────────┐
-//! │                │ Q1 Title            │ Q2 Title          │
-//! │ H              │                     │                   │
-//! │ I  · Label A   │                     │                   │
-//! │ G              │  · Label B          │                   │
-//! │ H              │                     │                   │
-//! │   ─────────────┼─────────────────────│                   │
-//! │ R              │                     │                   │
-//! │ I  Q3 Title    │ Q4 Title            │                   │
-//! │ S              │                     │                   │
-//! │ K              │  · Label C          │                   │
-//! │                │                     │                   │
-//! │    Low ────────┴─────────── High ────│                   │
-//! └──────────────────────────────────────────────────────────┘
+//! ┌─ Title ───────────────────────────────────────────────────────┐
+//! │ H  Q2 Title                  │  Q1 Title                      │
+//! │ I                            │                                │
+//! │ G  · Point A description     │  · Point B                     │
+//! │ H  · Another point           │                                │
+//! │                              │                                │
+//! │ R ───────────────────────────┼────────────────────────────────│
+//! │ I                            │                                │
+//! │ S  Q3 Title                  │  Q4 Title                      │
+//! │ K                            │                                │
+//! │                              │  · Point C                     │
+//! │                              │                                │
+//! │       Low Effort ────────────┴────────────── High Effort ────│
+//! └───────────────────────────────────────────────────────────────┘
 //! ```
 
 use anyhow::Result;
-use std::collections::HashSet;
 use tracing::debug;
 
 use crate::core::Renderer;
 use super::database::QuadrantChartDatabase;
 
-const MIN_CHART_W: usize = 30;
-const MAX_CHART_W: usize = 70;
-const MIN_CHART_H: usize = 10;
+const MIN_W: usize = 40;
 const LABEL_COL: usize = 6; // columns reserved for vertical Y-axis label
+const Q_PAD: usize = 2; // padding inside quadrants
 
 #[derive(Debug, Clone)]
 pub struct QuadrantChartConfig {
@@ -36,9 +34,7 @@ pub struct QuadrantChartConfig {
 }
 
 impl Default for QuadrantChartConfig {
-    fn default() -> Self {
-        Self { width_hint: 0 }
-    }
+    fn default() -> Self { Self { width_hint: 0 } }
 }
 
 pub struct QuadrantChartRenderer {
@@ -54,74 +50,84 @@ impl QuadrantChartRenderer {
         Self { config: QuadrantChartConfig::default() }
     }
 
-    pub fn with_config(config: QuadrantChartConfig) -> Self {
-        Self { config }
-    }
+    pub fn with_config(config: QuadrantChartConfig) -> Self { Self { config } }
 
     pub fn render(&self, db: &QuadrantChartDatabase) -> Result<String> {
         debug!("Rendering quadrant chart");
 
-        // ── Compute dimensions ─────────────────────────────────
-        let max_label = db.points.iter()
-            .map(|p| p.label.len())
-            .max().unwrap_or(8)
-            .max(db.quadrant_labels.iter().map(|l| l.len()).max().unwrap_or(6));
+        // ── Assign points to quadrants ──────────────────────────
+        // Q1: top-right (x>=0.5, y>=0.5), Q2: top-left (x<0.5, y>=0.5)
+        // Q3: bottom-left (x<0.5, y<0.5), Q4: bottom-right (x>=0.5, y<0.5)
+        let mut q_points: [Vec<&str>; 4] = [vec![], vec![], vec![], vec![]];
+        for p in &db.points {
+            let qi = match (p.x >= 0.5, p.y >= 0.5) {
+                (true, true) => 0,   // Q1 top-right
+                (false, true) => 1,  // Q2 top-left
+                (false, false) => 2, // Q3 bottom-left
+                (true, false) => 3,  // Q4 bottom-right
+            };
+            q_points[qi].push(&p.label);
+        }
 
+        // ── Calculate widths ─────────────────────────────────────
         let y_label_len = db.y_axis_high.len().max(db.y_axis_low.len());
-        let use_vertical_y = y_label_len <= 12; // vertical if ≤ 12 chars
-
-        // Left margin: space for vertical Y labels or horizontal Y labels
+        let use_vertical_y = y_label_len <= 12;
         let left_margin = if use_vertical_y { LABEL_COL } else { y_label_len + 2 };
 
-        let cw = if self.config.width_hint > 0 {
-            (self.config.width_hint.saturating_sub(left_margin)).max(MIN_CHART_W)
+        // Per-quadrant content width
+        let q_label_w: Vec<usize> = db.quadrant_labels.iter().map(|l| l.len()).collect();
+        let mut half_w = MIN_W / 2;
+        for qi in 0..4 {
+            let max_pt = q_points[qi].iter().map(|l| l.len()).max().unwrap_or(0);
+            half_w = half_w.max(q_label_w[qi] + Q_PAD).max(max_pt + Q_PAD + 2);
+        }
+        half_w = half_w.min(45); // cap to avoid excessive width
+
+        let total_w = left_margin + half_w * 2 + 1 + 2; // margins + half + axis + borders
+        let total_w = if self.config.width_hint > 0 {
+            self.config.width_hint.max(total_w)
         } else {
-            (max_label + 8 + left_margin).max(MIN_CHART_W).min(MAX_CHART_W)
-        };
-        let chart_w = cw - left_margin;
-
-        let ch = {
-            let base = MIN_CHART_H;
-            let extra = db.points.len().saturating_sub(1) / 3;
-            (base + extra).max(8).min(26)
+            total_w.max(MIN_W)
         };
 
-        // Total canvas
-        let total_w = cw + 2; // +2 for borders
-        let total_h = ch + 3; // +2 borders + 1 bottom row for x-axis labels
+        // ── Calculate heights ────────────────────────────────────
+        // Each point takes 1 row, plus quadrant title row, plus padding
+        let mut top_rows = 1usize; // title row
+        let mut bot_rows = 1usize; // title row
+        for qi in 0..4 {
+            let pts = q_points[qi].len();
+            let rows_needed = 1 + pts; // title row + point rows
+            if qi <= 1 { top_rows = top_rows.max(rows_needed); }
+            else { bot_rows = bot_rows.max(rows_needed); }
+        }
+        top_rows = top_rows.max(3);
+        bot_rows = bot_rows.max(3);
+        let total_h = top_rows + bot_rows + 1 + 3; // +1 axis + 2 borders + 1 bottom label
 
         let mut canvas = vec![vec![' '; total_w]; total_h];
 
-        // ── Main border ────────────────────────────────────────
-        canvas[0][0] = '┌';
-        canvas[0][total_w - 1] = '┐';
-        for x in 1..total_w - 1 { canvas[0][x] = '─'; }
-        canvas[total_h - 1][0] = '└';
-        canvas[total_h - 1][total_w - 1] = '┘';
-        for x in 1..total_w - 1 { canvas[total_h - 1][x] = '─'; }
-        for y in 1..total_h - 1 {
-            canvas[y][0] = '│';
-            canvas[y][total_w - 1] = '│';
-        }
+        // ── Borders ────────────────────────────────────────────
+        canvas[0][0] = '┌'; canvas[0][total_w-1] = '┐';
+        for x in 1..total_w-1 { canvas[0][x] = '─'; }
+        canvas[total_h-1][0] = '└'; canvas[total_h-1][total_w-1] = '┘';
+        for x in 1..total_w-1 { canvas[total_h-1][x] = '─'; }
+        for y in 1..total_h-1 { canvas[y][0] = '│'; canvas[y][total_w-1] = '│'; }
 
         // ── Title ──────────────────────────────────────────────
         if let Some(title) = &db.title {
             let t = format!(" {} ", title);
             for (i, ch) in t.chars().take(total_w.saturating_sub(2)).enumerate() {
-                canvas[0][1 + i] = ch;
+                canvas[0][1+i] = ch;
             }
         }
 
-        // ── Chart area coords (inside borders, above bottom row) ──
-        let cl = 1 + left_margin;  // chart left (after Y labels)
-        let ct = 1;                 // chart top
-        let cr = total_w - 2;       // chart right
-        let cb = total_h - 3;       // chart bottom (above x-axis labels)
-        let ciw = cr - cl + 1;
-        let cih = cb - ct + 1;
-
-        let mid_x = cl + ciw / 2;
-        let mid_y = ct + cih / 2;
+        // ── Chart coords ────────────────────────────────────────
+        let cl = 1 + left_margin;
+        let ct = 1;
+        let cr = total_w - 2;
+        let cb = ct + top_rows + bot_rows; // last chart row
+        let mid_x = 1 + left_margin + half_w;
+        let mid_y = ct + top_rows;
 
         // ── Axes ───────────────────────────────────────────────
         for x in cl..=cr {
@@ -132,75 +138,57 @@ impl QuadrantChartRenderer {
         }
         canvas[mid_y][mid_x] = '┼';
 
-        // ── Y-axis labels (left of chart) ──────────────────────
+        // ── Y-axis labels (vertical if possible) ────────────────
         if use_vertical_y {
-            // High label: top half, vertical
-            self.write_vertical(&mut canvas, &db.y_axis_high,
-                cl.saturating_sub(3), ct + 2, ct + 2 + db.y_axis_high.len());
-            // Low label: bottom half, vertical
-            let low_start = cb.saturating_sub(db.y_axis_low.len() + 1);
-            self.write_vertical(&mut canvas, &db.y_axis_low,
-                cl.saturating_sub(3), low_start, low_start + db.y_axis_low.len());
+            let high_start = ct + 1;
+            write_vertical(&mut canvas, &db.y_axis_high, cl.saturating_sub(3), high_start);
+            let low_start = cb.saturating_sub(db.y_axis_low.len());
+            write_vertical(&mut canvas, &db.y_axis_low, cl.saturating_sub(3), low_start);
         } else {
-            // Horizontal Y labels, centered in each half
-            let high_y = ct + cih / 4;
-            self.write_str(&mut canvas, &db.y_axis_high, cl.saturating_sub(db.y_axis_high.len() + 1), high_y);
-            let low_y = cb - cih / 4;
-            self.write_str(&mut canvas, &db.y_axis_low, cl.saturating_sub(db.y_axis_low.len() + 1), low_y);
+            let hy = ct + top_rows / 2;
+            write_str(&mut canvas, &db.y_axis_high, cl.saturating_sub(db.y_axis_high.len() + 1), hy);
+            let ly = cb - bot_rows / 2;
+            write_str(&mut canvas, &db.y_axis_low, cl.saturating_sub(db.y_axis_low.len() + 1), ly);
         }
 
-        // ── X-axis labels (below chart, on bottom border row) ──
-        let label_row = total_h - 2; // second-to-last row
-        let left_region_end = mid_x.saturating_sub(1);
-        // Low label centered in left half
-        self.write_centered(&mut canvas, &db.x_axis_low, cl, label_row, left_region_end);
-        // High label centered in right half
-        self.write_centered(&mut canvas, &db.x_axis_high, mid_x, label_row, cr);
+        // ── X-axis labels (centered in each half) ───────────────
+        let xl_row = total_h - 2;
+        write_centered(&mut canvas, &db.x_axis_low, cl, xl_row, mid_x.saturating_sub(1));
+        write_centered(&mut canvas, &db.x_axis_high, mid_x, xl_row, cr);
 
-        // ── Quadrant titles (top of each quadrant) ─────────────
-        let qpad = 2;
-        // Q2: top-left → quadrant_labels[1]
-        self.write_str(&mut canvas, &db.quadrant_labels[1], cl + qpad,
-            ct + 1);
-        // Q1: top-right → quadrant_labels[0]
-        self.write_str(&mut canvas, &db.quadrant_labels[0], mid_x + qpad,
-            ct + 1);
-        // Q3: bottom-left → quadrant_labels[2]
-        self.write_str(&mut canvas, &db.quadrant_labels[2], cl + qpad,
-            mid_y + 1);
-        // Q4: bottom-right → quadrant_labels[3]
-        self.write_str(&mut canvas, &db.quadrant_labels[3], mid_x + qpad,
-            mid_y + 1);
+        // ── Quadrant titles ─────────────────────────────────────
+        // Q2 (top-left) [1], Q1 (top-right) [0]
+        write_str(&mut canvas, &db.quadrant_labels[1], cl + Q_PAD, ct + 1);
+        write_str(&mut canvas, &db.quadrant_labels[0], mid_x + Q_PAD, ct + 1);
+        // Q3 (bottom-left) [2], Q4 (bottom-right) [3]
+        write_str(&mut canvas, &db.quadrant_labels[2], cl + Q_PAD, mid_y + 1);
+        write_str(&mut canvas, &db.quadrant_labels[3], mid_x + Q_PAD, mid_y + 1);
 
-        // ── Plot points ────────────────────────────────────────
-        // Points with dot + label, avoiding overlaps
-        let mut occupied: HashSet<(usize, usize)> = HashSet::new();
-
-        // Sort by y desc so higher points get first pick of rows
-        let mut sorted: Vec<_> = db.points.iter().enumerate().collect();
-        sorted.sort_by(|a, b| b.1.y.partial_cmp(&a.1.y).unwrap_or(std::cmp::Ordering::Equal));
-
-        for (_i, point) in &sorted {
-            let px = cl + 1 + ((point.x * (ciw.saturating_sub(2)) as f64).round() as usize);
-            let py = cb.saturating_sub(1) - ((point.y * (cih.saturating_sub(2)) as f64).round() as usize);
-            let px = px.clamp(cl + 1, cr.saturating_sub(1));
-            let py = py.clamp(ct + 3, cb.saturating_sub(1)); // skip title row
-
-            // Find free row for the dot
-            let dot_y = find_free_row(&occupied, px, py, cb);
-            canvas[dot_y][px] = '·';
-            occupied.insert((px, dot_y));
-
-            // Label: "· Label text" starting at px+1
-            let avail = cr.saturating_sub(px + 2).max(3);
-            let wrapped = wrap_text(&point.label, avail.saturating_sub(1));
-            for (li, line) in wrapped.iter().enumerate() {
-                let ly = (dot_y + li).min(cb);
-                for (i, ch) in line.chars().enumerate() {
-                    let xp = px + 2 + i;
-                    if xp <= cr && ly < canvas.len() && xp < canvas[ly].len() {
-                        canvas[ly][xp] = ch;
-                    }
+        // ── Plot points as list per quadrant ────────────────────
+        for qi in 0..4 {
+            let (x_start, y_start) = match qi {
+                0 => (mid_x + Q_PAD, ct + 2),       // Q1 top-right
+                1 => (cl + Q_PAD, ct + 2),           // Q2 top-left
+                2 => (cl + Q_PAD, mid_y + 2),        // Q3 bottom-left
+                3 => (mid_x + Q_PAD, mid_y + 2),     // Q4 bottom-right
+            };
+            let y_max = match qi {
+                0 | 1 => mid_y.saturating_sub(1),
+                _ => cb,
+            };
+            for (pi, label) in q_points[qi].iter().enumerate() {
+                let y = y_start + pi;
+                if y > y_max { break; }
+                // Dot
+                let dot_x = x_start;
+                if dot_x < canvas[y].len() { canvas[y][dot_x] = '·'; }
+                // Label after dot
+                let label_x = dot_x + 2;
+                let max_w = cr.saturating_sub(label_x + 1);
+                let display = clip(label, max_w);
+                for (i, ch) in display.chars().enumerate() {
+                    let xp = label_x + i;
+                    if xp < canvas[y].len() { canvas[y][xp] = ch; }
                 }
             }
         }
@@ -212,72 +200,33 @@ impl QuadrantChartRenderer {
         }
         Ok(lines.join("\n"))
     }
+}
 
-    fn write_str(&self, canvas: &mut [Vec<char>], s: &str, x: usize, y: usize) {
-        if y >= canvas.len() { return; }
-        for (i, ch) in s.chars().enumerate() {
-            let xp = x + i;
-            if xp < canvas[y].len() { canvas[y][xp] = ch; }
-        }
+fn write_str(canvas: &mut [Vec<char>], s: &str, x: usize, y: usize) {
+    if y >= canvas.len() { return; }
+    for (i, ch) in s.chars().enumerate() {
+        let xp = x + i;
+        if xp < canvas[y].len() { canvas[y][xp] = ch; }
     }
+}
 
-    fn write_centered(&self, canvas: &mut [Vec<char>], s: &str, x1: usize, y: usize, x2: usize) {
-        let region = x2.saturating_sub(x1);
-        let x = x1 + region.saturating_sub(s.len()) / 2;
-        self.write_str(canvas, s, x, y);
-    }
+fn write_centered(canvas: &mut [Vec<char>], s: &str, x1: usize, y: usize, x2: usize) {
+    let region = x2.saturating_sub(x1);
+    let x = x1 + region.saturating_sub(s.len()) / 2;
+    write_str(canvas, s, x, y);
+}
 
-    fn write_vertical(&self, canvas: &mut [Vec<char>], s: &str, col: usize, y_start: usize, _y_end: usize) {
-        for (i, ch) in s.chars().enumerate() {
-            let y = y_start + i;
-            if y < canvas.len() && col < canvas[y].len() {
-                canvas[y][col] = ch;
-            }
+fn write_vertical(canvas: &mut [Vec<char>], s: &str, col: usize, y_start: usize) {
+    for (i, ch) in s.chars().enumerate() {
+        let y = y_start + i;
+        if y < canvas.len() && col < canvas[y].len() {
+            canvas[y][col] = ch;
         }
     }
 }
 
-fn find_free_row(occupied: &HashSet<(usize, usize)>, px: usize, py: usize, max_y: usize) -> usize {
-    for dy in 0i32..=5i32 {
-        for sign in [1i32, -1i32] {
-            let candidate = (py as i32 + sign * dy).max(1).min(max_y as i32) as usize;
-            if !occupied.contains(&(px, candidate)) {
-                return candidate;
-            }
-        }
-    }
-    py
-}
-
-fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
-    if max_width == 0 { return vec![text.to_string()]; }
-    let mut lines = Vec::new();
-    let mut cur = String::new();
-    for word in text.split_whitespace() {
-        if cur.is_empty() {
-            if word.len() <= max_width { cur.push_str(word); }
-            else {
-                for ch in word.chars() {
-                    if cur.len() >= max_width { lines.push(cur); cur = String::new(); }
-                    cur.push(ch);
-                }
-            }
-        } else if cur.len() + 1 + word.len() <= max_width {
-            cur.push(' '); cur.push_str(word);
-        } else {
-            lines.push(cur); cur = String::new();
-            if word.len() <= max_width { cur.push_str(word); }
-            else {
-                for ch in word.chars() {
-                    if cur.len() >= max_width { lines.push(cur); cur = String::new(); }
-                    cur.push(ch);
-                }
-            }
-        }
-    }
-    if !cur.is_empty() { lines.push(cur); }
-    if lines.is_empty() { lines.push(String::new()); }
-    lines
+fn clip(s: &str, max: usize) -> String {
+    if s.len() <= max { s.to_string() } else { s.chars().take(max).collect() }
 }
 
 impl Renderer<QuadrantChartDatabase> for QuadrantChartRenderer {
