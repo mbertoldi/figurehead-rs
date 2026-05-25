@@ -12,6 +12,7 @@ use crate::plugins::class::ClassDatabase;
 use crate::plugins::flowchart::FlowchartDatabase;
 use crate::plugins::gitgraph::GitGraphDatabase;
 use crate::plugins::sequence::SequenceDatabase;
+use crate::plugins::quadrantchart::QuadrantChartDatabase;
 use crate::plugins::state::StateDatabase;
 
 /// Plugin orchestrator that coordinates the entire pipeline
@@ -32,6 +33,8 @@ pub struct Orchestrator {
     class_renderer: Option<crate::plugins::class::ClassRenderer>,
     state_parser: Option<crate::plugins::state::StateParser>,
     state_renderer: Option<crate::plugins::state::StateRenderer>,
+    quadrantchart_parser: Option<crate::plugins::quadrantchart::QuadrantChartParser>,
+    quadrantchart_renderer: Option<crate::plugins::quadrantchart::QuadrantChartRenderer>,
 }
 
 impl Orchestrator {
@@ -50,6 +53,8 @@ impl Orchestrator {
             class_renderer: None,
             state_parser: None,
             state_renderer: None,
+            quadrantchart_parser: None,
+            quadrantchart_renderer: None,
         }
     }
 
@@ -78,6 +83,8 @@ impl Orchestrator {
             class_renderer: None,
             state_parser: None,
             state_renderer: None,
+            quadrantchart_parser: None,
+            quadrantchart_renderer: None,
         }
     }
 
@@ -106,6 +113,10 @@ impl Orchestrator {
             class_renderer: Some(crate::plugins::class::ClassRenderer::new()),
             state_parser: Some(crate::plugins::state::StateParser::new()),
             state_renderer: Some(crate::plugins::state::StateRenderer::new()),
+            quadrantchart_parser: Some(crate::plugins::quadrantchart::QuadrantChartParser::new()),
+            quadrantchart_renderer: Some(
+                crate::plugins::quadrantchart::QuadrantChartRenderer::new(),
+            ),
         }
     }
 
@@ -120,12 +131,17 @@ impl Orchestrator {
         use crate::plugins::flowchart::FlowchartDetector;
         use crate::plugins::gitgraph::GitGraphDetector;
         use crate::plugins::sequence::SequenceDetector;
+        use crate::plugins::quadrantchart::QuadrantChartDetector;
         use crate::plugins::state::StateDetector;
         self.register_detector("flowchart".to_string(), Box::new(FlowchartDetector::new()));
         self.register_detector("gitgraph".to_string(), Box::new(GitGraphDetector::new()));
         self.register_detector("sequence".to_string(), Box::new(SequenceDetector::new()));
         self.register_detector("class".to_string(), Box::new(ClassDetector::new()));
         self.register_detector("state".to_string(), Box::new(StateDetector::new()));
+        self.register_detector(
+            "quadrantchart".to_string(),
+            Box::new(QuadrantChartDetector::new()),
+        );
         self
     }
 
@@ -199,6 +215,7 @@ impl Orchestrator {
             "sequence" => self.process_sequence(input),
             "class" => self.process_class(input),
             "state" => self.process_state(input),
+            "quadrantchart" => self.process_quadrantchart(input),
             _ => {
                 warn!(diagram_type, "Unsupported diagram type");
                 Err(anyhow::anyhow!(
@@ -469,6 +486,31 @@ impl Orchestrator {
         drop(_render_enter);
 
         info!("State diagram processing completed successfully");
+        Ok(canvas)
+    }
+
+    /// Process quadrant chart input directly (skip detection)
+    pub fn process_quadrantchart(&self, input: &str) -> Result<String> {
+        let qc_span = span!(Level::INFO, "process_quadrantchart", input_len = input.len());
+        let _enter = qc_span.enter();
+        info!("Processing quadrant chart");
+
+        let parser = self
+            .quadrantchart_parser
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No quadrant chart parser available"))?;
+        let mut database = QuadrantChartDatabase::new();
+        parser.parse(input, &mut database)?;
+        debug!(point_count = database.points.len(), "Parsing completed");
+
+        let renderer = self
+            .quadrantchart_renderer
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No quadrant chart renderer available"))?;
+        let canvas = renderer.render(&database)?;
+        debug!(output_len = canvas.len(), "Rendering completed");
+
+        info!("Quadrant chart processing completed successfully");
         Ok(canvas)
     }
 }
