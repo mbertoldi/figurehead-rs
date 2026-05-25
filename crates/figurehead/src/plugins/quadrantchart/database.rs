@@ -75,6 +75,14 @@ impl Database for QuadrantChartDatabase {
         None
     }
 
+    fn node_count(&self) -> usize {
+        0
+    }
+
+    fn edge_count(&self) -> usize {
+        0
+    }
+
     fn nodes(&self) -> impl Iterator<Item = &Self::Node> {
         std::iter::empty()
     }
