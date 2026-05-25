@@ -5,6 +5,7 @@
 
 pub mod class;
 pub mod flowchart;
+pub mod gantt;
 pub mod gitgraph;
 pub mod orchestrator;
 pub mod quadrantchart;
@@ -13,6 +14,7 @@ pub mod state;
 
 pub use class::*;
 pub use flowchart::*;
+pub use gantt::*;
 pub use gitgraph::*;
 pub use orchestrator::*;
 pub use quadrantchart::*;

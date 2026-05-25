@@ -12,6 +12,7 @@ use crate::plugins::class::ClassDatabase;
 use crate::plugins::flowchart::FlowchartDatabase;
 use crate::plugins::gitgraph::GitGraphDatabase;
 use crate::plugins::sequence::SequenceDatabase;
+use crate::plugins::gantt::GanttDatabase;
 use crate::plugins::quadrantchart::QuadrantChartDatabase;
 use crate::plugins::state::StateDatabase;
 
@@ -35,6 +36,8 @@ pub struct Orchestrator {
     state_renderer: Option<crate::plugins::state::StateRenderer>,
     quadrantchart_parser: Option<crate::plugins::quadrantchart::QuadrantChartParser>,
     quadrantchart_renderer: Option<crate::plugins::quadrantchart::QuadrantChartRenderer>,
+    gantt_parser: Option<crate::plugins::gantt::GanttParser>,
+    gantt_renderer: Option<crate::plugins::gantt::GanttRenderer>,
 }
 
 impl Orchestrator {
@@ -55,6 +58,8 @@ impl Orchestrator {
             state_renderer: None,
             quadrantchart_parser: None,
             quadrantchart_renderer: None,
+            gantt_parser: None,
+            gantt_renderer: None,
         }
     }
 
@@ -85,6 +90,8 @@ impl Orchestrator {
             state_renderer: None,
             quadrantchart_parser: None,
             quadrantchart_renderer: None,
+            gantt_parser: None,
+            gantt_renderer: None,
         }
     }
 
@@ -117,6 +124,8 @@ impl Orchestrator {
             quadrantchart_renderer: Some(
                 crate::plugins::quadrantchart::QuadrantChartRenderer::new(),
             ),
+            gantt_parser: Some(crate::plugins::gantt::GanttParser::new()),
+            gantt_renderer: Some(crate::plugins::gantt::GanttRenderer::new()),
         }
     }
 
@@ -131,6 +140,7 @@ impl Orchestrator {
         use crate::plugins::flowchart::FlowchartDetector;
         use crate::plugins::gitgraph::GitGraphDetector;
         use crate::plugins::sequence::SequenceDetector;
+        use crate::plugins::gantt::GanttDetector;
         use crate::plugins::quadrantchart::QuadrantChartDetector;
         use crate::plugins::state::StateDetector;
         self.register_detector("flowchart".to_string(), Box::new(FlowchartDetector::new()));
@@ -142,6 +152,7 @@ impl Orchestrator {
             "quadrantchart".to_string(),
             Box::new(QuadrantChartDetector::new()),
         );
+        self.register_detector("gantt".to_string(), Box::new(GanttDetector::new()));
         self
     }
 
@@ -216,6 +227,7 @@ impl Orchestrator {
             "class" => self.process_class(input),
             "state" => self.process_state(input),
             "quadrantchart" => self.process_quadrantchart(input),
+            "gantt" => self.process_gantt(input),
             _ => {
                 warn!(diagram_type, "Unsupported diagram type");
                 Err(anyhow::anyhow!(
@@ -512,6 +524,20 @@ impl Orchestrator {
 
         info!("Quadrant chart processing completed successfully");
         Ok(canvas)
+    }
+
+    /// Process gantt chart input directly.
+    pub fn process_gantt(&self, input: &str) -> Result<String> {
+        info!("Processing Gantt chart");
+        let parser = self.gantt_parser.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No gantt parser available"))?;
+        let mut db = GanttDatabase::new();
+        parser.parse(input, &mut db)?;
+        let renderer = self.gantt_renderer.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No gantt renderer available"))?;
+        let out = renderer.render(&db)?;
+        info!("Gantt chart processed");
+        Ok(out)
     }
 }
 
