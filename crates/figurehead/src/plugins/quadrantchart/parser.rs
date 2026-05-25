@@ -5,6 +5,7 @@
 use anyhow::{Context, Result, bail};
 use tracing::{debug, trace, warn};
 
+use crate::core::Parser;
 use super::database::{QuadrantChartDatabase, QuadrantPoint};
 
 /// Parser for quadrantChart syntax.
@@ -112,6 +113,26 @@ impl QuadrantChartParser {
 
         trace!(line, "Skipping unrecognized line");
         Ok(())
+    }
+}
+
+impl Parser<QuadrantChartDatabase> for QuadrantChartParser {
+    fn parse(&self, input: &str, database: &mut QuadrantChartDatabase) -> Result<()> {
+        QuadrantChartParser::parse(self, input, database)
+    }
+
+    fn name(&self) -> &'static str {
+        "quadrantchart"
+    }
+
+    fn version(&self) -> &'static str {
+        "0.1.0"
+    }
+
+    fn can_parse(&self, input: &str) -> bool {
+        let first = input.trim().lines().next().unwrap_or("").trim();
+        first.to_lowercase().starts_with("quadrantchart")
+            || first.to_lowercase().starts_with("quadrant chart")
     }
 }
 

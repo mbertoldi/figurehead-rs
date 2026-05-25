@@ -3,6 +3,7 @@
 use anyhow::Result;
 use tracing::debug;
 
+use crate::core::Renderer;
 use super::database::QuadrantChartDatabase;
 
 #[derive(Debug, Clone)]
@@ -178,6 +179,26 @@ impl QuadrantChartRenderer {
                 canvas[y][x + i] = ch;
             }
         }
+    }
+}
+
+impl Renderer<QuadrantChartDatabase> for QuadrantChartRenderer {
+    type Output = String;
+
+    fn render(&self, database: &QuadrantChartDatabase) -> Result<Self::Output> {
+        QuadrantChartRenderer::render(self, database)
+    }
+
+    fn name(&self) -> &'static str {
+        "quadrantchart-ascii"
+    }
+
+    fn version(&self) -> &'static str {
+        "0.1.0"
+    }
+
+    fn format(&self) -> &'static str {
+        "ascii"
     }
 }
 
