@@ -3,6 +3,7 @@
 use anyhow::{Context, Result, bail};
 use tracing::debug;
 
+use crate::core::Parser;
 use super::database::{GanttDatabase, GanttSection, GanttTask, TaskStatus};
 
 /// Simple date: year, month, day.
@@ -124,6 +125,17 @@ impl GanttParser {
         db.recompute_range();
         debug!(sections = db.sections.len(), "Gantt parsing complete");
         Ok(())
+    }
+}
+
+impl Parser<GanttDatabase> for GanttParser {
+    fn parse(&self, input: &str, db: &mut GanttDatabase) -> Result<()> {
+        GanttParser::parse(self, input, db)
+    }
+    fn name(&self) -> &'static str { "gantt" }
+    fn version(&self) -> &'static str { "0.1.0" }
+    fn can_parse(&self, input: &str) -> bool {
+        input.trim().lines().next().unwrap_or("").trim().to_lowercase().starts_with("gantt")
     }
 }
 
