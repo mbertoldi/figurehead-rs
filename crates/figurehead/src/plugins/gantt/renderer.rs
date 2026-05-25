@@ -85,7 +85,7 @@ impl GanttRenderer {
                     }
                 }
 
-                rows.push(format!("│{} {}│", label, bar_line));
+                rows.push(format!("│{} {}│", label, bar_line)); // v3-space
             }
 
             // Gap after section
